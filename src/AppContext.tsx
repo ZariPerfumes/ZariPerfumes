@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Language, CartItem, Product } from './types';
+import { Language, CartItem, Product, ShippingAddress } from './types';
 
 interface AppContextType {
   lang: Language;
@@ -7,6 +7,8 @@ interface AppContextType {
   cart: CartItem[];
   wishlist: Product[];
   recentlyViewed: Product[];
+  shippingAddress: ShippingAddress;
+  setShippingAddress: (address: ShippingAddress) => void;
   addToCart: (p: Product, quantity?: number) => void;
   removeFromCart: (productId: string) => void;
   updateQuantity: (productId: string, delta: number) => void;
@@ -44,6 +46,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return saved ? JSON.parse(saved) : [];
   });
 
+  const [shippingAddress, setShippingAddress] = useState<ShippingAddress>(() => {
+    const saved = localStorage.getItem('zari_shipping');
+    return saved ? JSON.parse(saved) : {
+      full_name: '',
+      emirate: '',
+      city: '',
+      street: '',
+      extra_info: '',
+      lat: 25.2048,
+      lng: 55.2708
+    };
+  });
+
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -62,6 +77,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     localStorage.setItem('zari_lang', lang);
   }, [lang]);
+
+  useEffect(() => {
+    localStorage.setItem('zari_shipping', JSON.stringify(shippingAddress));
+  }, [shippingAddress]);
 
   const addToCart = (product: Product, quantity: number = 1) => {
     setCart(prev => {
@@ -119,9 +138,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   return (
     <AppContext.Provider value={{
-      lang, setLang, cart, wishlist, recentlyViewed, addToCart, removeFromCart, 
-      updateQuantity, toggleWishlist, addToRecentlyViewed, clearRecentlyViewed, 
-      clearCart, setWishlist, isSearchOpen, setIsSearchOpen, searchQuery, setSearchQuery
+      lang, setLang, cart, wishlist, recentlyViewed, shippingAddress, setShippingAddress, 
+      addToCart, removeFromCart, updateQuantity, toggleWishlist, addToRecentlyViewed, 
+      clearRecentlyViewed, clearCart, setWishlist, isSearchOpen, setIsSearchOpen, 
+      searchQuery, setSearchQuery
     }}>
       <div dir={lang === 'ar' ? 'rtl' : 'ltr'} className={lang === 'ar' ? 'font-arabic' : ''}>
         {children}

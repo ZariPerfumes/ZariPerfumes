@@ -58,7 +58,7 @@ const StoreDetail: React.FC = () => {
   if (!store) return <div className="pt-40 text-center font-black dark:text-white">Store not found</div>;
 
   return (
-    <div className="pt-24 pb-20 bg-white dark:bg-purple-950 transition-colors duration-300 min-h-screen">
+    <div className="pt-18 pb-20 bg-white dark:bg-purple-950 transition-colors duration-300 min-h-screen">
       <div className="relative h-87.5 mb-16">
         {store.image && (
           <img src={store.image} className="w-full h-full object-cover" alt={store.nameEn} />

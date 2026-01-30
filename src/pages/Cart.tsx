@@ -7,9 +7,8 @@ import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from 'react-lea
 import html2canvas from 'html2canvas';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { Product } from '../types';
-import emailjs from '@emailjs/browser';
 import { QRCodeSVG } from 'qrcode.react';
+import { supabase } from '../supabaseClient';
 
 const icon = L.icon({
   iconUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png",
@@ -32,20 +31,17 @@ function ChangeView({ center, zoom }: { center: [number, number], zoom: number }
 
 function MapEvents({ setCoords }: { setCoords: (c: [number, number]) => void }) {
   useMapEvents({
-    click(e) {
-      setCoords([e.latlng.lat, e.latlng.lng]);
-    },
+    click(e) { setCoords([e.latlng.lat, e.latlng.lng]); },
   });
   return null;
 }
 
 const Cart: React.FC = () => {
-  const { lang, cart, updateQuantity, removeFromCart, clearCart, recentlyViewed } = useApp();
+  const { lang, cart, updateQuantity, removeFromCart, clearCart, recentlyViewed, shippingAddress } = useApp();
   const navigate = useNavigate();
   const receiptRef = useRef<HTMLDivElement>(null);
   const t = (key: string) => UI_STRINGS[key]?.[lang] || key;
 
-  const [dbProducts, setDbProducts] = useState<Product[]>([]);
   const [dbLocations, setDbLocations] = useState<any[]>([]);
   const [showCheckout, setShowCheckout] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
@@ -54,23 +50,156 @@ const Cart: React.FC = () => {
   const [isGift, setIsGift] = useState(false);
   const [step, setStep] = useState(1);
   const [method, setMethod] = useState<'pickup' | 'delivery' | null>(null);
+  
   const [emirate, setEmirate] = useState('');
   const [city, setCity] = useState('');
+  const [locationDetails, setLocationDetails] = useState({ street: '', villa: '' });
+  const [mapCoords, setMapCoords] = useState<[number, number]>([25.4052, 55.5136]);
+
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
-  const [warningId, setWarningId] = useState<string | null>(null);
   const [couponCode, setCouponCode] = useState('');
-  const [activeCoupon, setActiveCoupon] = useState<{code: string, discount: number} | null>(null);
+  const [appliedCoupon, setAppliedCoupon] = useState<{code: string, discount: number} | null>(null);
   const [couponError, setCouponError] = useState('');
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const [alreadySubscribed, setAlreadySubscribed] = useState(false);
   const [newsEmail, setNewsEmail] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [mapCoords, setMapCoords] = useState<[number, number]>([25.4052, 55.5136]);
   const [mapZoom, setMapZoom] = useState(11);
-  const [locationDetails, setLocationDetails] = useState({ street: '', villa: '' });
   const [orderTime] = useState(new Date().toLocaleString());
+  const [recommended, setRecommended] = useState<any[]>([]);
+
+  useEffect(() => {
+  const fetchRecommended = async () => {
+    const { data } = await supabase.from('products').select('*').limit(10);
+    if (data) {
+      // Shuffle and take 4
+      const shuffled = [...data].sort(() => 0.5 - Math.random()).slice(0, 4);
+      setRecommended(shuffled);
+    }
+  };
+  fetchRecommended();
+}, []);
+
+  const subtotal = useMemo(() => cart.reduce((acc, item) => acc + (item.price * item.quantity), 0), [cart]);
+
+  const deliveryFee = useMemo(() => {
+    if (method === 'pickup') return 0;
+    const loc = dbLocations.find(l => l.emirateEn === emirate && l.city === city);
+    return loc ? loc.cost : 0;
+  }, [method, emirate, city, dbLocations]);
+
+  const discountAmount = useMemo(() => appliedCoupon ? (subtotal * appliedCoupon.discount) / 100 : 0, [subtotal, appliedCoupon]);
+  const total = useMemo(() => subtotal - discountAmount + (deliveryFee || 0) + (isGift ? 10 : 0), [subtotal, discountAmount, deliveryFee, isGift]);
+
+  const applyCoupon = async () => {
+    setCouponError('');
+    const { data, error } = await supabase
+      .from('coupons')
+      .select('*')
+      .eq('code', couponCode.toUpperCase())
+      .eq('active', true)
+      .single();
+
+    if (error || !data) {
+      setCouponError(lang === 'en' ? 'Invalid or inactive code' : 'كود غير صحيح');
+      return;
+    }
+
+    if (data.times_used >= data.usage_limit) {
+      setCouponError(lang === 'en' ? 'This coupon has expired' : 'انتهت صلاحية الكود');
+      return;
+    }
+
+    setAppliedCoupon({ code: data.code, discount: data.discount_percent });
+  };
+
+const handleFinish = async () => {
+    // 1. Create a Google Maps link from the Leaflet pin coordinates
+    const googleMapsLink = `https://www.google.com/maps?q=${mapCoords[0]},${mapCoords[1]}`;
+    
+    // 2. Format the address to prioritize coordinates for the Admin
+    const addressStr = method === 'delivery' 
+      ? `Coords: ${mapCoords[0].toFixed(6)}, ${mapCoords[1].toFixed(6)} | ${emirate}, ${city}, ${locationDetails.street}, ${locationDetails.villa}` 
+      : 'Pickup';
+
+    const orderData = {
+      customer_email: email,
+      customer_phone: phone,
+      items: cart,
+      total_amount: total,
+      method: method,
+      address: addressStr,
+      is_gift: isGift,
+      notes: `${orderNotes}${method === 'delivery' ? `\nLocation: ${googleMapsLink}` : ''}`,
+      coupon_code: appliedCoupon?.code || null,
+      status: 'waiting'
+    };
+
+    try {
+      const { error } = await supabase.from('orders').insert([orderData]);
+      if (error) throw error;
+
+      if (appliedCoupon) {
+        await supabase.rpc('increment_coupon_usage', { target_code: appliedCoupon.code });
+      }
+
+      // WhatsApp Message Formatting with Pin Link
+      const itemSummary = cart.map(i => `• ${i.quantity}x ${i.nameEn}`).join('%0A');
+      const waText = `*NEW ORDER FROM ZARI*%0A%0A` +
+        `*Customer:* ${email}%0A` +
+        `*Phone:* 971${phone}%0A` +
+        `*Method:* ${method}%0A` +
+        `*Location:* ${method === 'delivery' ? encodeURIComponent(googleMapsLink) : 'Pickup'}%0A` +
+        `*Address:* ${encodeURIComponent(addressStr)}%0A` +
+        `*Items:*%0A${itemSummary}%0A%0A` +
+        `*Total:* ${total.toFixed(0)} AED`;
+
+      window.open(`https://wa.me/971502323591?text=${waText}`, '_blank');
+
+      clearCart();
+      navigate('/');
+    } catch (err) {
+      alert('Error processing order.');
+    }
+  };
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        setEmail(session.user.email || '');
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('phone')
+          .eq('id', session.user.id)
+          .single();
+        if (profile?.phone) setPhone(profile.phone.replace(/\D/g, '').slice(-9));
+      }
+    };
+    fetchUserData();
+  }, [showCheckout]);
+
+  useEffect(() => {
+    const fetchLocations = async () => {
+      const { data } = await supabase.from('locations').select('*');
+      if (data) setDbLocations(data);
+    };
+    fetchLocations();
+  }, []);
+
+  useEffect(() => {
+    if (showCheckout && shippingAddress.emirate) {
+      setMethod('delivery');
+      setEmirate(shippingAddress.emirate);
+      setCity(shippingAddress.city || '');
+      setLocationDetails({ 
+        street: shippingAddress.street || '', 
+        villa: shippingAddress.extra_info || '' 
+      });
+      if (shippingAddress.lat && shippingAddress.lng) {
+        setMapCoords([shippingAddress.lat, shippingAddress.lng]);
+      }
+    }
+  }, [showCheckout, shippingAddress]);
 
   useEffect(() => {
     if (emirate && CITY_COORDS[emirate]) {
@@ -79,37 +208,16 @@ const Cart: React.FC = () => {
     }
   }, [emirate]);
 
-  const subtotal = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-  const discountAmount = activeCoupon ? (subtotal * (activeCoupon.discount / 100)) : 0;
-  
-  const deliveryFee = useMemo(() => {
-    if (method === 'pickup') return 0;
-    if (method === 'delivery' && city) {
-      return dbLocations.find(l => l.emirateEn === emirate && l.city === city)?.cost || 0;
-    }
-    return null;
-  }, [method, city, emirate, dbLocations]);
+  const uniqueEmirates = useMemo(() => {
+    return Array.from(new Set(dbLocations.map(loc => loc.emirateEn))).sort();
+  }, [dbLocations]);
 
-  const giftFee = isGift ? 10 : 0;
-  const total = subtotal - discountAmount + (deliveryFee || 0) + giftFee;
-
-  const applyCoupon = async () => {
-    setCouponError(lang === 'en' ? 'Service currently unavailable' : 'الخدمة غير متوفرة حالياً');
-  };
-
-  const handleDetailsConfirm = () => {
-    setStep(4);
-  };
-
-  const handleNewsletterJoin = () => {
-    setStep(4);
-  };
-
-  const handleIncrement = (item: any) => {
-    updateQuantity(item.id, 1);
-  };
-
-  const handleFullReset = () => { clearCart(); setShowCheckout(false); setStep(1); setIsGift(false); setOrderNotes(''); navigate('/'); };
+  const filteredCities = useMemo(() => {
+    return dbLocations
+      .filter(loc => loc.emirateEn === emirate)
+      .map(loc => loc.city)
+      .sort();
+  }, [emirate, dbLocations]);
 
   const downloadReceipt = async () => {
     if (receiptRef.current) {
@@ -121,13 +229,13 @@ const Cart: React.FC = () => {
     }
   };
 
-  const isPhoneValid = /^(05|5)\d{8}$/.test(phone.replace(/\s/g, ''));
-
   const isStep1Valid = method === 'pickup' || (method === 'delivery' && emirate !== '' && city !== '');
-  const isStep2Valid = /^(05|5)\d{8}$/.test(phone) && 
+  const isStep2Valid = phone.length >= 9 && 
                     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && 
                     (method === 'pickup' || (locationDetails.street !== '' && locationDetails.villa !== ''));
-  const finalMapLink = method === 'pickup' ? "https://maps.app.goo.gl/P9JwrHX6xiBPmgiy6" : `https://www.google.com/maps?q=$${mapCoords[0]},${mapCoords[1]}`;
+  const finalMapLink = method === 'pickup' 
+    ? "https://maps.google.com" 
+    : `https://www.google.com/maps?q=${mapCoords[0]},${mapCoords[1]}`;
 
   return (
     <div className="pt-16 pb-20 bg-gray-50/50 dark:bg-purple-950 transition-colors duration-300 min-h-screen w-full" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
@@ -143,17 +251,10 @@ const Cart: React.FC = () => {
 
       {showGiftPopup && (
         <div className="fixed inset-0 z-150 flex items-center justify-center p-6 bg-black/40 backdrop-blur-xl">
-          <div className="bg-white dark:bg-purple-900 p-10 rounded-[48px] shadow-2xl max-w-lg w-full border dark:border-white/10 animate-in zoom-in-95">
+          <div className="bg-white dark:bg-purple-900 p-10 rounded-[48px] shadow-2xl max-w-lg w-full border dark:border-white/10">
             <h4 className="text-3xl font-black mb-4 dark:text-white text-center">🎁 {lang === 'en' ? 'Gift Service (+10 AED)' : 'خدمة الهدايا (+10 درهم)'}</h4>
-            <p className="text-gray-600 dark:text-gray-300 font-bold text-center mb-6">
-              {lang === 'en' ? "We provide elegant gift wrapping and a personalized handwritten note for your loved ones." : "نقدم تغليف هدايا أنيق مع رسالة مكتوبة بخط اليد لأحبائك."}
-            </p>
-            <textarea 
-              value={orderNotes} 
-              onChange={e => { setOrderNotes(e.target.value); setIsGift(true); }} 
-              placeholder={lang === 'en' ? 'Write your message here...' : 'اكتب رسالتك هنا...'} 
-              className="w-full p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-3xl font-black outline-none min-h-30 mb-6 border-2 border-purple-100 dark:border-white/10"
-            />
+            <p className="text-gray-600 dark:text-gray-300 font-bold text-center mb-6">{lang === 'en' ? "Elegant gift wrapping and a personalized note." : "تغليف هدايا أنيق مع رسالة مخصصة."}</p>
+            <textarea value={orderNotes} onChange={e => { setOrderNotes(e.target.value); setIsGift(true); }} placeholder={lang === 'en' ? 'Write your message...' : 'اكتب رسالتك...'} className="w-full p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-3xl font-black outline-none min-h-30 mb-6 border-2 border-purple-100 dark:border-white/10" />
             <button onClick={() => setShowGiftPopup(false)} className="w-full bg-purple-600 text-white py-5 rounded-3xl font-black shadow-xl mb-4">{lang === 'en' ? 'Save & Close' : 'حفظ وإغلاق'}</button>
             <button onClick={() => { setIsGift(false); setOrderNotes(''); setShowGiftPopup(false); }} className="w-full text-gray-400 font-bold text-sm">{lang === 'en' ? 'Remove Gift Service' : 'إزالة خدمة الهدايا'}</button>
           </div>
@@ -175,20 +276,17 @@ const Cart: React.FC = () => {
             <div className="lg:w-2/3 space-y-6">
               {cart.map(item => (
                 <div key={item.id} className="bg-white dark:bg-purple-900 p-8 rounded-4xl shadow-sm border border-purple-50 dark:border-white/5 flex items-center gap-8 relative overflow-hidden transition-all hover:shadow-md">
-                  <Link to={`/product/${item.id}`} className="shrink-0">
-                    <img src={item.image} className="w-32 h-32 rounded-3xl object-cover" alt="" />
-                  </Link>
+                  <Link to={`/product/${item.id}`} className="shrink-0"><img src={item.image} className="w-32 h-32 rounded-3xl object-cover" alt="" /></Link>
                   <div className="grow">
-                    <Link to={`/product/${item.id}`}>
-                      <h3 className="text-2xl font-black dark:text-white hover:text-purple-600 transition-colors">{lang === 'en' ? item.nameEn : item.nameAr}</h3>
-                    </Link>
+                    <Link to={`/product/${item.id}`}><h3 className="text-2xl font-black dark:text-white hover:text-purple-600 transition-colors">{lang === 'en' ? item.nameEn : item.nameAr}</h3></Link>
                     <p className="text-purple-600 dark:text-purple-400 font-bold">{item.price} AED</p>
                     <div className="flex items-center bg-purple-50 dark:bg-white/5 dark:text-white w-fit rounded-2xl p-1.5 mt-4 gap-6">
                       <button onClick={() => item.quantity === 1 ? removeFromCart(item.id) : updateQuantity(item.id, -1)} className="font-black text-xl px-2">-</button>
                       <span className="font-black text-xl">{item.quantity}</span>
-                      <button onClick={() => handleIncrement(item)} className="font-black text-xl px-2">+</button>
+                      <button onClick={() => updateQuantity(item.id, 1)} className="font-black text-xl px-2">+</button>
                     </div>
                   </div>
+                  <button onClick={() => removeFromCart(item.id)} className="absolute top-4 right-4 text-gray-300 hover:text-red-500 transition-colors">✕</button>
                 </div>
               ))}
               <button onClick={() => setShowClearCartConfirm(true)} className="text-red-500 font-black uppercase text-sm tracking-widest p-4">{lang === 'en' ? 'Clear All Items' : 'مسح كل العناصر'}</button>
@@ -204,27 +302,15 @@ const Cart: React.FC = () => {
                 {couponError && <p className="text-red-500 text-xs font-bold mb-4">{couponError}</p>}
                 <div className="space-y-4 border-b dark:border-white/10 pb-8 mb-8 text-xl font-bold dark:text-gray-300">
                    <div className="flex justify-between"><span>{lang === 'en' ? 'Subtotal' : 'المجموع الفرعي'}</span><span>{subtotal} AED</span></div>
-                   {isGift && (
-                     <div className="flex justify-between text-purple-600 dark:text-purple-400">
-                       <span>🎁 {lang === 'en' ? 'Gift' : 'هدية'}</span>
-                       <span>10 AED</span>
-                     </div>
-                   )}
-                   {deliveryFee !== null && (
-                       <div className="flex justify-between text-purple-600 dark:text-purple-400">
-                           <span>{t('delivery')}</span>
-                           <span>{deliveryFee > 0 ? `${deliveryFee} AED` : (lang === 'en' ? 'Free' : 'مجاني')}</span>
-                       </div>
-                   )}
+                   {appliedCoupon && <div className="flex justify-between text-emerald-500"><span>{lang === 'en' ? 'Discount' : 'خصم'}</span><span>-{discountAmount} AED</span></div>}
+                   {isGift && <div className="flex justify-between text-purple-600 dark:text-purple-400"><span>🎁 {lang === 'en' ? 'Gift' : 'هدية'}</span><span>10 AED</span></div>}
+                   {deliveryFee > 0 && <div className="flex justify-between text-purple-600 dark:text-purple-400"><span>{t('delivery')}</span><span>{deliveryFee} AED</span></div>}
                 </div>
-                <div className="flex justify-between items-center mb-10 text-3xl font-black dark:text-white">
-                   <span>{t('total')}</span><span className="text-purple-600 dark:text-purple-400">{total.toFixed(0)} AED</span>
-                </div>
+                <div className="flex justify-between items-center mb-10 text-3xl font-black dark:text-white"><span>{t('total')}</span><span className="text-purple-600 dark:text-purple-400">{total.toFixed(0)} AED</span></div>
                 <div className="space-y-4">
                   <button onClick={() => setShowCheckout(true)} className="w-full bg-purple-600 text-white py-6 rounded-[28px] font-black text-2xl shadow-xl">{t('proceedToCheckout')}</button>
                   <button onClick={() => setShowGiftPopup(true)} className={`w-full py-4 rounded-[28px] font-black flex items-center justify-center gap-3 border-2 transition-all ${isGift ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-500 text-emerald-600' : 'border-purple-200 dark:border-white/10 text-purple-600 dark:text-purple-400'}`}>
-                    <span>{isGift ? '✔️' : '🎁'}</span>
-                    {lang === 'en' ? 'Is this a gift?' : 'هل هذه هدية؟'}
+                    <span>{isGift ? '✔️' : '🎁'}</span>{lang === 'en' ? 'Is this a gift?' : 'هل هذه هدية؟'}
                   </button>
                 </div>
               </div>
@@ -237,9 +323,9 @@ const Cart: React.FC = () => {
         <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-purple-950/40 backdrop-blur-md">
           <div className="bg-white dark:bg-purple-900 rounded-[56px] w-full max-w-3xl overflow-hidden flex flex-col max-h-[92vh] relative">
             <div className="bg-purple-900 dark:bg-black p-10 text-white flex justify-between items-center relative overflow-hidden">
-               <div className="absolute bottom-0 left-0 h-1 bg-purple-400 transition-all duration-500" style={{ width: `${(step / 4) * 100}%` }}></div>
-               <button onClick={() => setShowExitConfirm(true)} className="text-3xl font-bold z-10 hover:text-purple-300 transition-colors">✕</button>
-               <div className="flex items-center gap-10 z-10">{[1, 2, 3, 4].map(i => <div key={i} className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black transition-all ${step>=i?'bg-white text-purple-900':'bg-white/10'}`}>{i}</div>)}</div>
+                <div className="absolute bottom-0 left-0 h-1 bg-purple-400 transition-all duration-500" style={{ width: `${(step / 4) * 100}%` }}></div>
+                <button onClick={() => setShowExitConfirm(true)} className="text-3xl font-bold z-10 hover:text-purple-300 transition-colors">✕</button>
+                <div className="flex items-center gap-10 z-10">{[1, 2, 4].map(i => <div key={i} className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black transition-all ${step>=i?'bg-white text-purple-900':'bg-white/10'}`}>{i === 4 ? 3 : i}</div>)}</div>
             </div>
 
             {showExitConfirm && (
@@ -256,23 +342,22 @@ const Cart: React.FC = () => {
               {step === 1 && (
                 <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
                   <div className="grid grid-cols-2 gap-6">
-                    <div className="flex flex-col gap-2">
-                      <button onClick={() => {setMethod('pickup'); setCity(''); setEmirate('');}} className={`p-8 rounded-4xl border-4 font-black text-xl transition-all ${method === 'pickup' ? 'border-purple-600 bg-purple-50 dark:bg-purple-800 dark:text-white' : 'border-gray-50 dark:border-white/5 dark:text-gray-400'}`}>{lang === 'en' ? 'Pickup' : 'استلام'}</button>
-                    </div>
+                    <button onClick={() => {setMethod('pickup'); setCity(''); setEmirate('');}} className={`p-8 rounded-4xl border-4 font-black text-xl transition-all ${method === 'pickup' ? 'border-purple-600 bg-purple-50 dark:bg-purple-800 dark:text-white' : 'border-gray-50 dark:border-white/5 dark:text-gray-400'}`}>{lang === 'en' ? 'Pickup' : 'استلام'}</button>
                     <button onClick={() => setMethod('delivery')} className={`p-8 rounded-4xl border-4 font-black text-xl transition-all ${method === 'delivery' ? 'border-purple-600 bg-purple-50 dark:bg-purple-800 dark:text-white' : 'border-gray-50 dark:border-white/5 dark:text-gray-400'}`}>{lang === 'en' ? 'Delivery' : 'توصيل'}</button>
                   </div>
                   {method === 'delivery' && (
-                    <div className="grid gap-6 animate-in zoom-in-95">
-                      <select value={emirate} onChange={(e) => setEmirate(e.target.value)} className="p-6 bg-purple-50 dark:bg-white/5 dark:text-white rounded-3xl font-black outline-none appearance-none">
-                        <option value="" className="dark:bg-purple-900">{lang === 'en' ? 'Select Emirate' : 'اختر الإمارة'}</option>
-                        {Object.keys(CITY_COORDS).map(e => (
-                           <option key={e} value={e} className="dark:bg-purple-900">{e}</option>
-                        ))}
+                    <div className="grid gap-6">
+                      <select value={emirate} onChange={(e) => {setEmirate(e.target.value); setCity('');}} className="p-6 bg-purple-50 dark:bg-white/5 dark:text-white rounded-3xl font-black outline-none appearance-none">
+                        <option value="">{lang === 'en' ? 'Select Emirate' : 'اختر الإمارة'}</option>
+                        {uniqueEmirates.map(e => <option key={e} value={e}>{e}</option>)}
                       </select>
-                      <input value={city} onChange={(e) => setCity(e.target.value)} placeholder={t('selectCity')} className="p-6 bg-purple-50 dark:bg-white/5 dark:text-white rounded-3xl font-black outline-none" />
+                      <select value={city} onChange={(e) => setCity(e.target.value)} disabled={!emirate} className="p-6 bg-purple-50 dark:bg-white/5 dark:text-white rounded-3xl font-black outline-none appearance-none disabled:opacity-50">
+                        <option value="">{lang === 'en' ? 'Select City' : 'اختر المدينة'}</option>
+                        {filteredCities.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
                     </div>
                   )}
-                  <button disabled={!isStep1Valid} onClick={() => setStep(2)} className="w-full bg-purple-600 text-white py-6 rounded-[28px] font-black text-xl shadow-xl disabled:opacity-20 transition-all active:scale-95">{lang === 'en' ? 'Continue' : 'متابعة'} →</button>
+                  <button disabled={!isStep1Valid} onClick={() => setStep(2)} className="w-full bg-purple-600 text-white py-6 rounded-[28px] font-black text-xl shadow-xl">{lang === 'en' ? 'Continue' : 'متابعة'} →</button>
                 </div>
               )}
 
@@ -289,33 +374,19 @@ const Cart: React.FC = () => {
                         </MapContainer>
                       </div>
                       <div className="grid grid-cols-2 gap-4">
-                        <input placeholder={t('street')} className="p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-[20px] font-black outline-none" onChange={e => setLocationDetails({...locationDetails, street: e.target.value})} />
-                        <input placeholder={t('villa')} className="p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-[20px] font-black outline-none" onChange={e => setLocationDetails({...locationDetails, villa: e.target.value})} />
+                        <input value={locationDetails.street} placeholder={t('street')} className="p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-[20px] font-black outline-none" onChange={e => setLocationDetails({...locationDetails, street: e.target.value})} />
+                        <input value={locationDetails.villa} placeholder={t('villa')} className="p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-[20px] font-black outline-none" onChange={e => setLocationDetails({...locationDetails, villa: e.target.value})} />
                       </div>
                     </div>
                   )}
                   <input value={email} onChange={e => setEmail(e.target.value)} placeholder={lang === 'en' ? 'Email' : 'البريد الإلكتروني'} className="w-full p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-[20px] font-black outline-none" />
-                  <input 
-  value={phone} 
-  onChange={e => {
-    const val = e.target.value.replace(/\D/g, ''); // Removes non-numeric characters
-    if (val.length <= 10) setPhone(val);
-  }} 
-  placeholder={lang === 'en' ? 'Phone (e.g. 0501234567)' : 'رقم الهاتف (مثال 0501234567)'} 
-  className="w-full p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-[20px] font-black outline-none" 
-/>
-                  
-                  <div className="space-y-4">
-                    <button onClick={() => { setIsGift(!isGift); if(!isGift) setShowGiftPopup(true); }} className={`w-full py-4 rounded-[20px] font-black flex items-center justify-center gap-3 border-2 transition-all ${isGift ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-500 text-emerald-600' : 'border-purple-200 dark:border-white/10 text-purple-600 dark:text-purple-400'}`}>
-                        <span>{isGift ? '✔️' : '🎁'}</span>
-                        {lang === 'en' ? 'Gift Service (+10 AED)' : 'خدمة الهدايا (+10 درهم)'}
-                    </button>
-                    <textarea value={orderNotes} onChange={e => setOrderNotes(e.target.value)} placeholder={lang === 'en' ? 'Special requests / Gift message...' : 'طلبات خاصة / رسالة هدية...'} className="w-full p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-[20px] font-black outline-none min-h-25 resize-none" />
+                  <div className="relative">
+                    <span className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 font-bold border-r pr-3 dark:border-white/10">+971</span>
+                    <input value={phone} onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0,9))} placeholder="501234567" className="w-full pl-24 p-5 bg-purple-50 dark:bg-white/5 dark:text-white rounded-[20px] font-black outline-none" />
                   </div>
-
                   <div className="flex gap-4">
-                    <button onClick={() => setStep(1)} className="w-1/3 bg-gray-100 dark:bg-white/5 dark:text-white py-6 rounded-[28px] font-black text-xl">{lang === 'en' ? 'Back' : 'رجوع'}</button>
-                    <button disabled={!isStep2Valid} onClick={handleDetailsConfirm} className="flex-1 bg-purple-600 text-white py-6 rounded-[28px] font-black shadow-xl disabled:opacity-20 transition-all active:scale-95">{lang === 'en' ? 'Confirm Details' : 'تأكيد البيانات'}</button>
+                    <button onClick={() => setStep(1)} className="w-1/3 bg-gray-100 dark:bg-white/5 dark:text-white py-6 rounded-[28px] font-black">{lang === 'en' ? 'Back' : 'رجوع'}</button>
+                    <button disabled={!isStep2Valid} onClick={() => setStep(4)} className="flex-1 bg-purple-600 text-white py-6 rounded-[28px] font-black shadow-xl">{lang === 'en' ? 'Confirm Details' : 'تأكيد البيانات'}</button>
                   </div>
                 </div>
               )}
@@ -324,39 +395,62 @@ const Cart: React.FC = () => {
                 <div className="text-center space-y-6 animate-in fade-in slide-in-from-bottom-4">
                   <div ref={receiptRef} className="bg-white p-10 rounded-[40px] border-8 border-purple-50 text-left space-y-6 shadow-2xl relative overflow-hidden" dir="ltr">
                     <h2 className="text-3xl font-black text-purple-900 italic tracking-tighter">ZARI PERFUMES</h2>
-                    {isGift && (
-                      <div className="absolute top-8 right-8 border-2 border-emerald-500 text-emerald-500 px-3 py-1 rounded-lg text-[10px] font-black rotate-12">GIFT WRAPPED</div>
-                    )}
-                    <div className="grid grid-cols-2 gap-4 text-[10px] font-black uppercase text-gray-400 border-b pb-4">
-                      <div>Date: {orderTime}</div>
-                      <div className="text-right">Method: {method}</div>
-                    </div>
+                    {isGift && <div className="absolute top-8 right-8 border-2 border-emerald-500 text-emerald-500 px-3 py-1 rounded-lg text-[10px] font-black rotate-12">GIFT WRAPPED</div>}
+                    <div className="grid grid-cols-2 gap-4 text-[10px] font-black uppercase text-gray-400 border-b pb-4"><div>Date: {orderTime}</div><div className="text-right">Method: {method}</div></div>
                     <div className="space-y-1 text-xs font-bold bg-purple-50 p-4 rounded-2xl border border-purple-100">
                         <p className="text-purple-900">Customer: {email}</p>
                         <p className="text-purple-900">Phone: +971 {phone}</p>
                         {method === 'delivery' && <p className="text-purple-900 italic">Address: {emirate}, {city}, {locationDetails.street}, {locationDetails.villa}</p>}
-                        {(orderNotes || isGift) && <p className="text-purple-900 text-[10px] mt-2 border-t pt-2 italic">Notes: {isGift ? '🎁 GIFT: ' : ''}{orderNotes}</p>}
+                        {orderNotes && <p className="text-purple-900 text-[10px] mt-2 border-t pt-2 italic">Notes: {orderNotes}</p>}
+                        {appliedCoupon && <p className="text-emerald-600 text-[10px] font-black">Coupon: {appliedCoupon.code} (-{appliedCoupon.discount}%)</p>}
                     </div>
                     <div className="space-y-4 py-4 border-b-2 border-dashed border-purple-100">
                       {cart.map(item => (
                         <div key={item.id} className="flex justify-between text-lg font-black text-gray-800">
-                          <span>{item.quantity}x {item.nameEn}</span>
-                          <span>{(item.price * item.quantity).toFixed(0)} AED</span>
+                          <span>{item.quantity}x {item.nameEn}</span><span>{(item.price * item.quantity).toFixed(0)} AED</span>
                         </div>
                       ))}
-                      {isGift && <div className="flex justify-between text-purple-600 font-bold text-sm"><span>Gift Service Fee</span><span>10 AED</span></div>}
                     </div>
                     <div className="flex justify-between items-center pt-4">
                       <div><span className="text-2xl font-black text-purple-900 block tracking-tighter">TOTAL</span><span className="text-4xl font-black text-purple-600">{total.toFixed(0)} AED</span></div>
                       <div className="bg-white p-2 border-2 rounded-xl shadow-inner"><QRCodeSVG value={finalMapLink} size={80} /></div>
                     </div>
                   </div>
-                  <button onClick={downloadReceipt} className="w-full bg-purple-100 dark:bg-white/5 text-purple-900 dark:text-purple-400 py-4 rounded-2xl font-black uppercase tracking-widest">{lang === 'en' ? 'Download Image' : 'حفظ كصورة'}</button>
-                  <a href="https://form.jotform.com/zariperfumes/receipt-form" target="_blank" rel="noreferrer" className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black text-2xl shadow-xl block">{lang === 'en' ? 'UPLOAD SCREENSHOT →' : 'ارفع الصورة هنا ←'}</a>
-                  <button onClick={handleFullReset} className="w-full border-4 border-red-500 text-red-500 py-4 rounded-2xl font-black uppercase text-xs">{lang === 'en' ? 'Finish & Clear Cart' : 'إنهاء وإفراغ السلة'}</button>
-                </div>
-              )}
+                  <button onClick={downloadReceipt} className="w-full bg-purple-100 dark:bg-white/5 text-purple-900 dark:text-purple-400 py-4 rounded-2xl font-black uppercase tracking-widest">
+      {lang === 'en' ? 'Save Receipt to Phone' : 'حفظ الفاتورة في الهاتف'}
+    </button>
+
+    <button 
+      onClick={handleFinish} 
+      className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black text-2xl shadow-xl block"
+    >
+      {lang === 'en' ? 'PLACE ORDER NOW →' : 'إتمام الطلب الآن ←'}
+    </button>
+  </div>
+)}
             </div>
+          </div>
+        </div>
+      )}
+
+{/* Recommended Products */}
+      {!showCheckout && recommended.length > 0 && (
+        <div className="max-w-400 mx-auto px-6 mt-32">
+          <h2 className="text-3xl font-black mb-10 dark:text-white">
+            {lang === 'en' ? 'Recommended For You' : 'مقترح لك'}
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            {recommended.map(product => <ProductCard key={product.id} product={product} />)}
+          </div>
+        </div>
+      )}
+
+      {/* Recently Viewed */}
+      {recentlyViewed.length > 0 && !showCheckout && (
+        <div className="max-w-400 mx-auto px-6 mt-32">
+          <h2 className="text-3xl font-black mb-10 dark:text-white">{t('recentlyViewed')}</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            {recentlyViewed.map(product => <ProductCard key={product.id} product={product} />)}
           </div>
         </div>
       )}

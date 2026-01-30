@@ -59,6 +59,16 @@ export interface DeliveryCost {
   cities: { [key: string]: number };
 }
 
+export interface ShippingAddress {
+  full_name: string;
+  emirate: string;
+  city: string;
+  street: string;
+  extra_info: string;
+  lat: number;
+  lng: number;
+}
+
 export interface Translation {
   [key: string]: {
     en: string;

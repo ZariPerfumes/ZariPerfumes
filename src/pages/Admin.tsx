@@ -13,11 +13,22 @@ interface Coupon {
   usage_limit: number; 
   times_used: number; 
 }
+interface Order {
+  id: string;
+  created_at: string;
+  customer_email: string;
+  customer_phone: string;
+  items: any[];
+  total_amount: number;
+  method: string;
+  address: string;
+  status: 'waiting' | 'prepared' | 'shipped' | 'delivered' | 'canceled';
+}
 
 const Admin: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState('');
-  const [activeTab, setActiveTab] = useState<'workshops' | 'stores' | 'products' | 'locations' | 'newsletter' | 'coupons'>('workshops');
+  const [activeTab, setActiveTab] = useState<'orders' | 'workshops' | 'stores' | 'products' | 'locations' | 'newsletter' | 'coupons'>('orders');
   const [loading, setLoading] = useState(false);
   
   const [products, setProducts] = useState<Product[]>([]);
@@ -26,6 +37,7 @@ const Admin: React.FC = () => {
   const [locations, setLocations] = useState<Location[]>([]);
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [sortType, setSortType] = useState('name-asc');
@@ -50,14 +62,47 @@ const Admin: React.FC = () => {
     const { data: l } = await supabase.from('locations').select('*').order('emirateEn', { ascending: true });
     const { data: subs } = await supabase.from('subscribers').select('*').order('created_at', { ascending: false });
     const { data: c } = await supabase.from('coupons').select('*').order('created_at', { ascending: false });
+    const { data: o } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
     
+    if (c) {
+      const fullyUsed = c.filter(coupon => coupon.times_used >= coupon.usage_limit);
+      if (fullyUsed.length > 0) {
+        await supabase.from('coupons').delete().in('id', fullyUsed.map(cp => cp.id));
+        const { data: updatedC } = await supabase.from('coupons').select('*').order('created_at', { ascending: false });
+        setCoupons(updatedC || []);
+      } else {
+        setCoupons(c);
+      }
+    }
+
     if (p) setProducts(p);
     if (s) setStores(s);
     if (w) setWorkshops(w);
     if (l) setLocations(l);
     if (subs) setSubscribers(subs);
-    if (c) setCoupons(c);
+    if (o) setOrders(o);
     setLoading(false);
+  };
+
+  const handleUpdateStatus = async (id: string, status: string) => {
+    if (status === 'delivered') {
+      if (confirm('Delete delivered order?')) {
+        await supabase.from('orders').delete().eq('id', id);
+        fetchData();
+      }
+    } else {
+      await supabase.from('orders').update({ status }).eq('id', id);
+      fetchData();
+    }
+  };
+
+  const openMap = (address: string) => {
+    const coordsRegex = /^(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)$/;
+    const isCoords = coordsRegex.test(address.trim());
+    const url = isCoords 
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+    window.open(url, '_blank');
   };
 
   const handleUpload = async (file: File) => {
@@ -87,11 +132,6 @@ const Admin: React.FC = () => {
     fetchData();
   };
 
-  const handleUpdateCoupon = async (id: string, updates: any) => {
-    await supabase.from('coupons').update(updates).eq('id', id);
-    fetchData();
-  };
-
   const handleDeleteCoupon = async (id: string) => {
     if (confirm('Delete this coupon?')) {
       await supabase.from('coupons').delete().eq('id', id);
@@ -109,14 +149,37 @@ const Admin: React.FC = () => {
   const sendNewsletter = async () => {
     if (!emailSubject || !emailMessage) return alert('Fill subject and message');
     setLoading(true);
-    try {
-      for (const sub of subscribers) {
-        await emailjs.send('service_7eznisq', 'template_z09zki6', { to_email: sub.email, subject: emailSubject, message: emailMessage }, 'mvUmmSyFlqs13U9CR');
-      }
-      alert('Newsletter sent!');
-      setEmailSubject(''); setEmailMessage('');
-    } catch (err) { alert('Error sending'); }
+    for (const sub of subscribers) {
+      try {
+        await emailjs.send('service_7eznisq', 'template_7qvsymj', {
+          to_email: sub.email,
+          to_name: sub.email.split('@')[0],
+          subject: emailSubject, 
+          message: emailMessage,
+          unsub_id: btoa(sub.email)
+        }, 'mvUmmSyFlqs13U9CR');
+      } catch (err) { console.error(err); }
+    }
     setLoading(false);
+    alert('Newsletter sent!');
+  };
+
+  const sendTestEmail = async () => {
+    if (!emailSubject || !emailMessage) return alert('Write something first!');
+    const testEmail = window.prompt("Where should I send the test?");
+    if (!testEmail) return;
+    setLoading(true);
+    try {
+      await emailjs.send('service_7eznisq', 'template_7qvsymj', {
+        to_email: testEmail,
+        to_name: "Admin Test",
+        subject: emailSubject, 
+        message: emailMessage,
+        unsub_id: btoa(testEmail)
+      }, 'mvUmmSyFlqs13U9CR');
+      alert('Test sent!');
+    } catch (err) { alert('Test failed.'); } 
+    finally { setLoading(false); }
   };
 
   const filteredProducts = useMemo(() => {
@@ -136,7 +199,7 @@ const Admin: React.FC = () => {
         <div className="bg-white dark:bg-purple-900 p-8 rounded-3xl shadow-xl border dark:border-white/10 w-full max-w-md">
           <h2 className="text-2xl font-black mb-6 text-center dark:text-white">Admin Access</h2>
           <input type="password" placeholder="Password" className="w-full p-4 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-2xl mb-4 font-bold outline-none" onChange={(e) => setPassword(e.target.value)} />
-          <button onClick={() => password === 'zari2026' ? setIsAuthenticated(true) : alert('Wrong Password')} className="w-full bg-black dark:bg-white dark:text-purple-900 text-white p-4 rounded-2xl font-black transition-all active:scale-95">Login</button>
+          <button onClick={() => password === import.meta.env.VITE_ADMIN_PASSWORD ? setIsAuthenticated(true) : alert('Wrong Password')} className="w-full bg-black dark:bg-white dark:text-purple-900 text-white p-4 rounded-2xl font-black transition-all active:scale-95">Login</button>
         </div>
       </div>
     );
@@ -146,76 +209,68 @@ const Admin: React.FC = () => {
     <div className="pt-32 pb-20 min-h-screen bg-gray-50 dark:bg-purple-950 transition-colors duration-300">
       <div className="container mx-auto px-4 max-w-6xl">
         <div className="flex justify-between items-center mb-10">
-          <h1 className="text-4xl font-black uppercase tracking-tighter dark:text-white">Dashboard</h1>
+          <div className="flex items-center gap-4">
+            <h1 className="text-4xl font-black uppercase tracking-tighter dark:text-white">Dashboard</h1>
+            <button onClick={fetchData} disabled={loading} className={`p-2 rounded-xl bg-white dark:bg-white/5 border dark:border-white/10 transition-all active:rotate-180 ${loading ? 'animate-spin' : ''}`}>🔄</button>
+          </div>
           <button onClick={() => setIsAuthenticated(false)} className="bg-red-50 dark:bg-red-900/20 text-red-500 px-6 py-2 rounded-xl font-bold text-sm">Logout</button>
         </div>
 
         <div className="flex gap-2 mb-10 overflow-x-auto pb-2 no-scrollbar">
-          {['workshops', 'stores', 'products', 'locations', 'newsletter', 'coupons'].map((tab) => (
+          {['orders', 'workshops', 'stores', 'products', 'locations', 'newsletter', 'coupons'].map((tab) => (
             <button key={tab} onClick={() => setActiveTab(tab as any)} className={`px-6 py-3 rounded-2xl font-black capitalize whitespace-nowrap transition-all ${activeTab === tab ? 'bg-purple-600 text-white shadow-lg' : 'bg-white dark:bg-white/5 text-gray-500 dark:text-gray-400'}`}>{tab}</button>
           ))}
         </div>
+
+        {activeTab === 'orders' && (
+          <div className="space-y-6 animate-in fade-in">
+            {orders.length === 0 && <p className="text-center py-20 font-bold text-gray-400">No active orders</p>}
+            {orders.map(order => (
+              <div key={order.id} className="bg-white dark:bg-purple-900 p-6 rounded-4xl border dark:border-white/10 flex flex-col md:flex-row justify-between gap-6">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-3 h-3 rounded-full ${order.status === 'waiting' ? 'bg-amber-500' : order.status === 'prepared' ? 'bg-blue-500' : order.status === 'shipped' ? 'bg-purple-500' : order.status === 'canceled' ? 'bg-red-500' : 'bg-emerald-500'}`}></span>
+                    <h3 className="font-black dark:text-white uppercase tracking-tighter">{order.customer_email}</h3>
+                  </div>
+                  <button onClick={() => openMap(order.address)} className="text-sm font-bold text-gray-400 uppercase tracking-widest hover:text-purple-500 transition-colors text-left flex items-center gap-1">📍 {order.address}</button>
+                  <p className="text-xs font-black text-purple-500">971 {order.customer_phone} • {order.method}</p>
+                  <div className="pt-2">
+                    {order.items.map((item: any, idx: number) => (
+                      <span key={idx} className="inline-block bg-gray-100 dark:bg-white/5 dark:text-gray-400 px-3 py-1 rounded-lg text-[10px] font-bold mr-2">{item.quantity}x {item.nameEn}</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end justify-between gap-4">
+                  <p className="text-2xl font-black dark:text-white">{order.total_amount} AED</p>
+                  <div className="flex flex-wrap justify-end gap-1 bg-gray-50 dark:bg-black/20 p-1 rounded-2xl">
+                    {['waiting', 'prepared', 'shipped', 'canceled', 'delivered'].map((s) => (
+                      <button key={s} onClick={() => handleUpdateStatus(order.id, s)} className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${order.status === s ? 'bg-white dark:bg-purple-600 shadow-sm dark:text-white' : 'text-gray-400 hover:text-gray-600'} ${s === 'canceled' && order.status !== 'canceled' ? 'hover:text-red-500' : ''}`}>{s}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {activeTab === 'coupons' && (
           <div className="grid lg:grid-cols-3 gap-10 animate-in fade-in slide-in-from-bottom-4">
             <form className="bg-white dark:bg-purple-900 p-6 rounded-3xl border dark:border-white/10 h-fit space-y-4 shadow-sm" onSubmit={async (e) => { e.preventDefault(); await supabase.from('coupons').insert([couponForm]); fetchData(); setCouponForm({ code: '', discount_percent: 5, usage_limit: 1, times_used: 0, active: true }); }}>
               <h3 className="font-black text-xl dark:text-white">Marketing Coupon</h3>
-              <input required className="w-full p-3 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl font-bold outline-none" placeholder="Code (e.g. SAVE20)" value={couponForm.code} onChange={e => setCouponForm({...couponForm, code: e.target.value.toUpperCase()})} />
+              <input required className="w-full p-3 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl font-bold outline-none" placeholder="Code" value={couponForm.code} onChange={e => setCouponForm({...couponForm, code: e.target.value.toUpperCase()})} />
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black text-gray-400 dark:text-gray-500 ml-1">DISCOUNT %</label>
-                  <input required type="number" className="w-full p-3 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl font-bold" value={couponForm.discount_percent} onChange={e => setCouponForm({...couponForm, discount_percent: Number(e.target.value)})} />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black text-gray-400 dark:text-gray-500 ml-1">USAGE LIMIT</label>
-                  <input required type="number" className="w-full p-3 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl font-bold" value={couponForm.usage_limit} onChange={e => setCouponForm({...couponForm, usage_limit: Number(e.target.value)})} />
-                </div>
+                <input required type="number" className="w-full p-3 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl font-bold" placeholder="%" value={couponForm.discount_percent} onChange={e => setCouponForm({...couponForm, discount_percent: Number(e.target.value)})} />
+                <input required type="number" className="w-full p-3 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-xl font-bold" placeholder="Limit" value={couponForm.usage_limit} onChange={e => setCouponForm({...couponForm, usage_limit: Number(e.target.value)})} />
               </div>
-              <button className="w-full bg-purple-600 text-white p-4 rounded-xl font-black shadow-lg transition-all active:scale-95">Add Coupon</button>
+              <button className="w-full bg-purple-600 text-white p-4 rounded-xl font-black shadow-lg">Add Coupon</button>
             </form>
-
-            <div className="lg:col-span-2 space-y-10">
-              <div className="space-y-4">
-                <h3 className="font-black text-sm uppercase tracking-widest text-gray-400">Marketing Coupons</h3>
-                {coupons.filter(c => !c.code.startsWith('ZARI-')).map(c => {
-                  const isExpired = c.times_used >= c.usage_limit;
-                  return (
-                    <div key={c.id} className={`p-5 bg-white dark:bg-purple-900 border dark:border-white/10 rounded-3xl flex items-center gap-6 transition-all ${isExpired ? 'opacity-50' : ''}`}>
-                      <div className="flex-1">
-                        <input className="font-black text-lg border-b dark:border-white/10 bg-transparent w-full outline-none focus:border-purple-400 dark:text-white" defaultValue={c.code} onBlur={e => handleUpdateCoupon(c.id, {code: e.target.value.toUpperCase()})} />
-                        <div className="flex items-center gap-4 mt-3">
-                          <span className="text-[10px] font-black text-purple-600 bg-purple-50 dark:bg-purple-800/50 px-2 py-1 rounded-md">{c.discount_percent}% OFF</span>
-                          <div className="flex-1 h-1.5 bg-gray-100 dark:bg-white/5 rounded-full overflow-hidden">
-                            <div className={`h-full transition-all ${isExpired ? 'bg-red-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min((c.times_used / c.usage_limit) * 100, 100)}%` }} />
-                          </div>
-                          <span className="text-[10px] font-black text-gray-400">{c.times_used} / {c.usage_limit} USED</span>
-                        </div>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <select className={`text-[10px] font-black border dark:border-white/10 dark:bg-purple-900 rounded-lg p-1 outline-none ${c.active ? 'text-emerald-600 border-emerald-100' : 'text-red-500'}`} defaultValue={c.active ? 'true' : 'false'} onChange={e => handleUpdateCoupon(c.id, {active: e.target.value === 'true'})}>
-                          <option value="true">ACTIVE</option><option value="false">PAUSED</option>
-                        </select>
-                        <button onClick={() => handleDeleteCoupon(c.id)} className="text-red-400 hover:text-red-600 font-black text-[10px] uppercase">Delete</button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="space-y-4">
-                <h3 className="font-black text-sm uppercase tracking-widest text-purple-600 dark:text-purple-400">Gift Coupons</h3>
-                <div className="grid md:grid-cols-2 gap-4">
-                  {coupons.filter(c => c.code.startsWith('ZARI-')).map(c => (
-                    <div key={c.id} className="p-4 bg-purple-50 dark:bg-purple-900 border border-purple-100 dark:border-white/10 rounded-2xl flex justify-between items-center">
-                      <div>
-                        <p className="font-black text-purple-900 dark:text-purple-300">{c.code}</p>
-                        <p className="text-[10px] font-bold text-purple-400 uppercase">{c.discount_percent}% OFF • ONE-TIME</p>
-                      </div>
-                      <button onClick={() => handleDeleteCoupon(c.id)} className="text-purple-300 hover:text-red-500 font-black text-lg">✕</button>
-                    </div>
-                  ))}
+            <div className="lg:col-span-2 space-y-4">
+              {coupons.map(c => (
+                <div key={c.id} className="p-5 bg-white dark:bg-purple-900 border dark:border-white/10 rounded-3xl flex items-center justify-between">
+                  <div><p className="font-black dark:text-white">{c.code}</p><p className="text-[10px] text-purple-600 font-black">{c.discount_percent}% OFF • {c.times_used}/{c.usage_limit} USED</p></div>
+                  <button onClick={() => handleDeleteCoupon(c.id)} className="text-red-400 font-black text-[10px] uppercase">Delete</button>
                 </div>
-              </div>
+              ))}
             </div>
           </div>
         )}
@@ -348,9 +403,10 @@ const Admin: React.FC = () => {
               <div className="space-y-4">
                 <input className="w-full p-4 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-2xl font-black outline-none focus:border-purple-400" placeholder="Subject Line" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} />
                 <textarea className="w-full p-4 border dark:border-white/10 dark:bg-white/5 dark:text-white rounded-2xl h-64 font-bold outline-none focus:border-purple-400" placeholder="Write your announcement here..." value={emailMessage} onChange={(e) => setEmailMessage(e.target.value)} />
-                <button disabled={loading} onClick={sendNewsletter} className="w-full bg-purple-600 text-white p-5 rounded-2xl font-black uppercase tracking-widest disabled:opacity-20 shadow-xl active:scale-95 transition-all">
-                  {loading ? 'Sending...' : `Send to ${subscribers.length} Subscribers`}
-                </button>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <button disabled={loading} onClick={sendTestEmail} className="w-full bg-gray-100 dark:bg-white/10 dark:text-white p-5 rounded-2xl font-black uppercase tracking-widest disabled:opacity-20 transition-all">Send Test Email</button>
+                  <button disabled={loading} onClick={sendNewsletter} className="w-full bg-purple-600 text-white p-5 rounded-2xl font-black uppercase tracking-widest disabled:opacity-20 shadow-xl active:scale-95 transition-all">{loading ? 'Sending...' : `Send to ${subscribers.length} Subs`}</button>
+                </div>
               </div>
             </div>
             <div className="space-y-4">
@@ -358,11 +414,8 @@ const Admin: React.FC = () => {
               <div className="max-h-150 overflow-y-auto space-y-2 pr-2 no-scrollbar">
                 {subscribers.map((sub) => (
                   <div key={sub.id} className="bg-white dark:bg-purple-900 p-4 border dark:border-white/10 rounded-2xl flex justify-between items-center group hover:border-purple-100 transition-all">
-                    <div>
-                      <p className="font-black text-sm dark:text-white">{sub.email}</p>
-                      <p className="text-[10px] text-gray-400 font-bold uppercase">{sub.phone ? `+971 ${sub.phone}` : 'No Phone'}</p>
-                    </div>
-                    <button onClick={() => handleDeleteSubscriber(sub.id)} className="text-red-400 hover:text-red-600 font-black text-[10px] uppercase opacity-0 group-hover:opacity-100 transition-all">Remove</button>
+                    <div><p className="font-black text-sm dark:text-white">{sub.email}</p><p className="text-[10px] text-gray-400 font-bold uppercase">{sub.phone ? `+971 ${sub.phone}` : 'No Phone'}</p></div>
+                    <button onClick={() => handleDeleteSubscriber(sub.id)} className="text-red-400 font-black text-[10px] uppercase opacity-0 group-hover:opacity-100 transition-all">Remove</button>
                   </div>
                 ))}
               </div>
