@@ -1,0 +1,7 @@
+{
+  "name": "Zari Perfumes",
+  "description": "Exclusive collection of authentic perfumes from around the world, based in Ajman, UAE.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
