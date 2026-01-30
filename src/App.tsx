@@ -14,6 +14,7 @@ import WhatsAppButton from './components/WhatsAppButton';
 import Admin from './pages/Admin'
 import Unsubscribe from './pages/Unsubscribe';
 import Account from './pages/Account';
+import ResetPassword from './pages/ResetPassword';
 import { Toaster } from 'react-hot-toast';
 import 'leaflet/dist/leaflet.css';
 import ProductDetail from './pages/ProductDetail';
@@ -117,6 +118,7 @@ const App: React.FC = () => {
               <Route path="/unsubscribe" element={<Unsubscribe />} />
               <Route path="/account" element={<Account />} />"
               <Route path="/admin" element={<Admin />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </main>

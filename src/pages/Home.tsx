@@ -244,52 +244,6 @@ const Home: React.FC = () => {
           </div>
         </div>
       </section>
-
-      {/* 7. NEWSLETTER SECTION */}
-      <section className="py-24 bg-white dark:bg-purple-950">
-        <div className="container mx-auto px-4">
-          <motion.div {...fadeInUp} className="bg-purple-600 rounded-[3rem] p-12 md:p-20 text-center text-white shadow-2xl">
-            <h2 className="text-5xl font-black mb-6">{t('stayintheloop')}</h2>
-            
-            {!isJoined ? (
-              <>
-                <p className="text-xl mb-10 opacity-80 max-w-xl mx-auto">{t('subscribe')}</p>
-                <div className="flex flex-col md:flex-row gap-4 max-w-md mx-auto">
-                  <input 
-                    type="email" 
-                    placeholder="example@example.com" 
-                    className="flex-1 px-8 py-4 rounded-full bg-white text-black outline-none font-bold"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    disabled={isSubmitting}
-                  />
-                  <button 
-                    onClick={handleSubscribe}
-                    disabled={isSubmitting}
-                    className="bg-black text-white px-10 py-4 rounded-full font-black hover:bg-white hover:text-black transition-all disabled:opacity-50"
-                  >
-                    {isSubmitting ? '...' : t('join')}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <motion.div 
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                className="bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-4xl max-w-md mx-auto"
-              >
-                <div className="text-4xl mb-4">✨</div>
-                <h3 className="text-2xl font-black mb-2">
-                  {lang === 'en' ? 'Already Joined!' : 'تم الانضمام بالفعل!'}
-                </h3>
-                <p className="font-bold opacity-80">
-                  {lang === 'en' ? 'You are part of the family.' : 'أنت الآن جزء من العائلة.'}
-                </p>
-              </motion.div>
-            )}
-          </motion.div>
-        </div>
-      </section>
     </div>
   );
 };

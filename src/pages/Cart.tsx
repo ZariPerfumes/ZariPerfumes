@@ -186,6 +186,11 @@ const handleFinish = async () => {
     fetchLocations();
   }, []);
 
+  const handleCombinedClick = () => {
+  downloadReceipt();
+  handleFinish();
+};
+
   useEffect(() => {
     if (showCheckout && shippingAddress.emirate) {
       setMethod('delivery');
@@ -416,16 +421,12 @@ const handleFinish = async () => {
                       <div className="bg-white p-2 border-2 rounded-xl shadow-inner"><QRCodeSVG value={finalMapLink} size={80} /></div>
                     </div>
                   </div>
-                  <button onClick={downloadReceipt} className="w-full bg-purple-100 dark:bg-white/5 text-purple-900 dark:text-purple-400 py-4 rounded-2xl font-black uppercase tracking-widest">
-      {lang === 'en' ? 'Save Receipt to Phone' : 'حفظ الفاتورة في الهاتف'}
-    </button>
-
-    <button 
-      onClick={handleFinish} 
-      className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black text-2xl shadow-xl block"
-    >
-      {lang === 'en' ? 'PLACE ORDER NOW →' : 'إتمام الطلب الآن ←'}
-    </button>
+                  <button 
+  onClick={handleCombinedClick} 
+  className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black text-2xl shadow-xl block"
+>
+  {lang === 'en' ? 'PLACE ORDER NOW →' : 'إتمام الطلب الآن ←'}
+</button>
   </div>
 )}
             </div>
