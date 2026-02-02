@@ -60,7 +60,9 @@ export interface DeliveryCost {
 }
 
 export interface ShippingAddress {
+  villa: string;
   full_name: string;
+  phone: string;
   emirate: string;
   city: string;
   street: string;

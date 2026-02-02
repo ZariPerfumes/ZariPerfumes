@@ -50,6 +50,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const saved = localStorage.getItem('zari_shipping');
     return saved ? JSON.parse(saved) : {
       full_name: '',
+      phone: '',
       emirate: '',
       city: '',
       street: '',
